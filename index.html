@@ -748,6 +748,114 @@ class Entity {
     const wdx = (ax, bx) => { let d=ax-bx; if(d>WORLD_WIDTH/2)d-=WORLD_WIDTH; if(d<-WORLD_WIDTH/2)d+=WORLD_WIDTH; return d; };
 
     // ── per-species hard overrides (no state machine needed for some) ──
+    if (this.name==='Dolphin') {
+      // ── Init persistent state ──
+      if (!this._ds) {
+        this._ds = 'east';
+        this._dTrav = 0;
+        this._breathT = 400 + Math.random()*300;
+        this._bubbleT = 600 + Math.random()*900;
+        this._playT = 0; this._playTgt = null;
+        this._bStep = null; this._bHold = 0;
+      }
+      const CRUISE = 1.6, EAST_PX = 700, BACK_PX = 105;
+      this._breathT -= dt; this._bubbleT -= dt;
+      if (this._playT > 0) this._playT -= dt;
+
+      // ── Bubble ring trigger ──
+      if (this._bubbleT <= 0) {
+        const fwd = this.flipX ? 1 : -1;
+        // Emit a ring of small bubbles that form a torus
+        const ringR = 6 + Math.random()*5;
+        const bx = this.x + fwd*this.size*1.0;
+        const by = this.y - this.size*0.08;
+        bubbleRings.push({
+          x:bx, y:by,
+          vx: fwd*3.4, vy:-0.6,
+          r:ringR, maxR:26+Math.random()*20,
+          alpha:0.9, birth:t,
+        });
+        this._bubbleT = 900 + Math.random()*1800;
+      }
+
+      // ── Breathing interrupt (surfaces for air) ──
+      if (this._breathT <= 0 && this._ds !== 'breathe') {
+        this._preBState = this._ds;
+        this._ds = 'breathe'; this._bStep = 'rising';
+        this._breathT = 800 + Math.random()*700;
+      }
+
+      switch (this._ds) {
+        case 'east': {
+          if (this.vx > 0) this._dTrav += this.vx*dt;
+          this.vx += (CRUISE - this.vx)*0.045;
+          // Gentle casual bob up and down
+          this.vy += Math.sin(t*0.033 + this.bobOffset)*0.13;
+          // Occasionally veer up, then drift back to mid-water
+          const midY = canvas.height*0.42;
+          this.vy += (midY - this.y)*0.003;
+          // Occasionally play with a nearby fish for a few seconds
+          if (this._playT <= 0 && Math.random()<0.0012) {
+            const candidates = allEntities.filter(e=>e!==this&&!e.isPlayer&&e.name!=='Shark'&&e.name!=='Dolphin');
+            if (candidates.length>0) {
+              this._playTgt = candidates[Math.floor(Math.random()*candidates.length)];
+              this._playT = this._playTgt.name==='Puffer Fish' ? 3600 : 150+Math.random()*150;
+              this._prePState = 'east';
+              this._ds = 'play';
+            }
+          }
+          if (this._dTrav >= EAST_PX) { this._dTrav=0; this._ds='turnback'; }
+          break;
+        }
+        case 'turnback': {
+          this._dTrav += Math.abs(this.vx)*dt;
+          this.vx += (-CRUISE - this.vx)*0.045;
+          this.vy += Math.sin(t*0.033 + this.bobOffset)*0.1;
+          if (this._dTrav >= BACK_PX) { this._dTrav=0; this._ds='east'; }
+          break;
+        }
+        case 'breathe': {
+          const topY = this.size*1.6;
+          if (this._bStep==='rising') {
+            this.vy += (topY - this.y)*0.04;
+            this.vx *= 0.93;
+            if (this.y <= topY+12) {
+              this._bStep='top'; this._bHold=55;
+              // Breath bubble ring (smaller, floats straight up)
+              const fwd = this.flipX ? 1 : -1;
+              bubbleRings.push({x:this.x+fwd*this.size*0.4, y:this.y, vx:fwd*1.8, vy:-1.8, r:4, maxR:13+Math.random()*8, alpha:0.72, birth:t});
+            }
+          } else if (this._bStep==='top') {
+            this._bHold -= dt;
+            this.vx*=0.88; this.vy*=0.88;
+            if (this._bHold<=0) this._bStep='descend';
+          } else {
+            const retY = canvas.height*0.4;
+            this.vy += (retY - this.y)*0.04;
+            if (Math.abs(this.y-retY)<18) { this._ds=this._preBState||'east'; this._bStep=null; }
+          }
+          break;
+        }
+        case 'play': {
+          if (!this._playTgt || this._playT<=0) {
+            this._playTgt=null; this._dTrav=0; this._ds=this._prePState||'east'; break;
+          }
+          let dx=this._playTgt.x-this.x;
+          if (dx>WORLD_WIDTH/2) dx-=WORLD_WIDTH; if (dx<-WORLD_WIDTH/2) dx+=WORLD_WIDTH;
+          const dy=this._playTgt.y-this.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+          if (d>this.size*2.5) {
+            this.vx+=dx/d*0.16; this.vy+=dy/d*0.11;
+          } else {
+            // Playfully bobbing near the fish
+            this.vy += Math.sin(t*0.07+this.bobOffset)*0.2;
+            this.vx *= 0.91;
+          }
+          break;
+        }
+      }
+      return;
+    }
+
     if (this.name==='Jellyfish') {
       this.vx *= 0.97;
       this.vy += Math.sin(t*0.03+this.bobOffset)*0.08;
@@ -794,8 +902,6 @@ class Entity {
         this.aiState = 'chase';
         const prey = allEntities.filter(e=>e!==this&&e.name!=='Shark'&&!e.isPlayer);
         if (prey.length>0) this.target = prey[Math.floor(Math.random()*prey.length)];
-      } else if (this.name==='Dolphin') {
-        this.aiState = r<0.35?'leap':r<0.7?'school':'wander';
       } else if (this.name==='Octopus') {
         this.aiState = r<0.5?'bottom_creep':'wander';
       } else if (this.name==='Manta Ray') {
@@ -871,11 +977,6 @@ class Entity {
         } else { this.aiState='school'; }
         break;
       }
-
-      case 'leap': // Dolphin
-        if (Math.random()<0.008) { this.vy-=this.speed*2; this.vx+=(Math.random()-0.5)*this.speed*1.5; }
-        this.vx += (Math.random()-0.5)*this.speed*0.2;
-        break;
 
       case 'bottom_creep': // Octopus slinks to seafloor, explores rocks
         if (this.y < floorY - 20) this.vy += 0.18;
@@ -971,6 +1072,7 @@ class Entity {
 
 // ─── ENTITIES ─────────────────────────────────────────────────────────────────
 let entities = [];
+let bubbleRings = [];
 let playerEntity = null;
 let isAIMode = false;
 let aiFollowEntity = null;
@@ -1392,6 +1494,37 @@ function loop() {
   // Draw entities
   for (const e of sorted) {
     e.draw(ctx, t);
+  }
+
+  // ── Bubble rings (dolphin vortex rings) ──────────────────────────────────
+  for (let i=bubbleRings.length-1; i>=0; i--) {
+    const r=bubbleRings[i];
+    r.x+=r.vx; r.y+=r.vy;
+    r.vx*=0.984;           // forward deceleration
+    r.vy-=0.055;           // rises and accelerates upward
+    r.r=Math.min(r.r+0.22, r.maxR);
+    r.alpha-=0.0022;
+    if (r.alpha<=0||r.y<-r.maxR*3) { bubbleRings.splice(i,1); continue; }
+    const sx=r.x-camX;
+    if (sx<-120||sx>canvas.width+120) continue;
+    ctx.save();
+    ctx.globalAlpha=r.alpha;
+    // Outer ring glow
+    ctx.shadowColor='#aef';
+    ctx.shadowBlur=16;
+    ctx.strokeStyle='rgba(190,238,255,0.95)';
+    ctx.lineWidth=Math.max(1.8, r.r*0.27);
+    ctx.beginPath();
+    ctx.ellipse(sx, r.y, r.r, r.r*0.40, 0, 0, Math.PI*2);
+    ctx.stroke();
+    // Subtle inner shimmer
+    ctx.shadowBlur=0;
+    ctx.globalAlpha=r.alpha*0.22;
+    ctx.fillStyle='rgba(220,248,255,0.6)';
+    ctx.beginPath();
+    ctx.ellipse(sx, r.y, r.r*0.58, r.r*0.16, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
   }
 
   // AI follow highlight ring
