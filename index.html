@@ -200,19 +200,17 @@ const ANIMAL_DEFS = [
 function drawClownfish(ctx, x, y, size, angle, t, flipX) {
   ctx.save(); ctx.translate(x,y);
   if (flipX) ctx.scale(-1,1);
-  const s = size/22;
   // body
   ctx.fillStyle='#ff6622'; ctx.beginPath();
   ctx.ellipse(0,0,size*0.9,size*0.5,0,0,Math.PI*2); ctx.fill();
-  // stripes
+  // stripes clipped to body shape
+  ctx.save();
+  ctx.beginPath(); ctx.ellipse(0,0,size*0.9,size*0.5,0,0,Math.PI*2); ctx.clip();
   ctx.fillStyle='#fff';
   for (let i of [-0.3,0.15,0.6]) {
     ctx.fillRect(size*i-3,-size*0.5,5,size);
   }
-  // clip to body
-  ctx.globalCompositeOperation='destination-in';
-  ctx.beginPath(); ctx.ellipse(0,0,size*0.9,size*0.5,0,0,Math.PI*2); ctx.fill();
-  ctx.globalCompositeOperation='source-over';
+  ctx.restore();
   // tail
   ctx.fillStyle='#ff6622';
   ctx.beginPath(); ctx.moveTo(size*0.8,0); ctx.lineTo(size*1.3,-size*0.5); ctx.lineTo(size*1.3,size*0.5); ctx.closePath(); ctx.fill();
