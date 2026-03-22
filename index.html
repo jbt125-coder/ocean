@@ -840,6 +840,8 @@ class Entity {
 let entities = [];
 let playerEntity = null;
 let isAIMode = false;
+let aiFollowEntity = null;
+let aiSwitchTimer = 0;
 
 function spawnEntities() {
   entities = [];
@@ -1098,14 +1100,22 @@ document.getElementById('ai-mode-btn').addEventListener('click',()=>{
   document.getElementById('selector').style.display='none';
   document.getElementById('joystick-area').style.display='none';
   document.getElementById('action-btns').style.display='none';
-  document.getElementById('hud-mode').textContent='AI Watch';
-  // Auto-pan
-  autoPan=true;
+  pickAICreature();
 });
 let autoPan=false, autoPanV=1.5;
 
+function pickAICreature() {
+  if (entities.length === 0) return;
+  aiFollowEntity = entities[Math.floor(Math.random()*entities.length)];
+  aiSwitchTimer = 600 + Math.floor(Math.random()*600); // 10-20s at 60fps
+  // Snap camera to creature immediately
+  camX = aiFollowEntity.x - canvas.width/2;
+  document.getElementById('hud-animal').textContent = aiFollowEntity.icon + ' ' + aiFollowEntity.name;
+  document.getElementById('hud-mode').textContent = 'AI Watch';
+}
+
 function chooseAnimal(def) {
-  isAIMode=false; autoPan=false;
+  isAIMode=false; autoPan=false; aiFollowEntity=null;
   document.getElementById('selector').style.display='none';
   document.getElementById('joystick-area').style.display='block';
   document.getElementById('action-btns').style.display='grid';
@@ -1129,8 +1139,7 @@ document.getElementById('btn-ai').addEventListener('click',()=>{
   if(playerEntity){playerEntity.isPlayer=false;playerEntity=null;}
   document.getElementById('joystick-area').style.display='none';
   document.getElementById('action-btns').style.display='none';
-  document.getElementById('hud-mode').textContent='AI Watch';
-  autoPan=true;
+  pickAICreature();
 });
 
 let speedMult=1;
@@ -1171,9 +1180,15 @@ function loop() {
     }
   }
 
-  if (isAIMode && autoPan) {
-    camX += autoPanV*speedMult;
-    if (Math.random()<0.002) autoPanV=(Math.random()-0.5)*3+1.5;
+  if (isAIMode) {
+    if (aiFollowEntity) {
+      // Smoothly track the chosen creature
+      const targetCamX = aiFollowEntity.x - canvas.width/2;
+      camX += (targetCamX - camX) * 0.04 * speedMult;
+      // Periodically switch to a different random creature
+      aiSwitchTimer -= dt;
+      if (aiSwitchTimer <= 0) pickAICreature();
+    }
   } else if (playerEntity) {
     updatePlayer(dt);
   }
@@ -1181,6 +1196,25 @@ function loop() {
   // Draw entities
   for (const e of sorted) {
     e.draw(ctx, t);
+  }
+
+  // AI follow highlight ring
+  if (isAIMode && aiFollowEntity) {
+    const sx = aiFollowEntity.x - camX;
+    const pulse = 0.6 + 0.4*Math.sin(t*0.08);
+    ctx.save();
+    ctx.globalAlpha = pulse * 0.55;
+    ctx.strokeStyle = '#0ff';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.arc(sx, aiFollowEntity.y, aiFollowEntity.size * 1.6, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.globalAlpha = pulse * 0.18;
+    ctx.fillStyle = '#0ff';
+    ctx.fill();
+    ctx.restore();
   }
 
   // Dance timer
