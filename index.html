@@ -125,12 +125,12 @@
   </div>
 </div>
 
-<div id="joystick-area">
+<div id="joystick-area" style="display:none">
   <div id="joystick-base">
     <div id="joystick-thumb"></div>
   </div>
 </div>
-<div id="action-btns">
+<div id="action-btns" style="display:none">
   <div class="action-btn" id="btn-dash">💨</div>
   <div class="action-btn" id="btn-up">↑</div>
   <div class="action-btn" id="btn-spin">🌀</div>
@@ -159,7 +159,7 @@ window.addEventListener('resize', resize);
 // ─── WORLD CONFIG ─────────────────────────────────────────────────────────────
 const WORLD_WIDTH = 20000;
 const WORLD_HEIGHT = () => canvas.height;
-let camX = 0, camY = 0;
+let camX = 0;
 
 // ─── ZONES ────────────────────────────────────────────────────────────────────
 const zones = [
@@ -170,35 +170,30 @@ const zones = [
   { name:'Deep Abyss',   x:16000, color1:'#000005', color2:'#050015', accent:'#ff3300' },
 ];
 function getZone(x) {
-  let z = zones[0];
-  for (let i = zones.length-1; i >= 0; i--) {
-    if (x >= zones[i].x) { z = zones[i]; break; }
-  }
-  // wrap
   const wx = ((x % WORLD_WIDTH) + WORLD_WIDTH) % WORLD_WIDTH;
   for (let i = zones.length-1; i >= 0; i--) {
-    if (wx >= zones[i].x) { z = zones[i]; break; }
+    if (wx >= zones[i].x) return zones[i];
   }
-  return z;
+  return zones[0];
 }
 
 // ─── ANIMAL TEMPLATES ─────────────────────────────────────────────────────────
 const ANIMAL_DEFS = [
-  { name:'Clownfish',   icon:'🐠', speed:3,   size:22, color:'#ff6600', draw:drawClownfish },
-  { name:'Blue Tang',   icon:'🐟', speed:4,   size:24, color:'#1166ff', draw:drawBlueTang },
-  { name:'Sea Turtle',  icon:'🐢', speed:2,   size:50, color:'#33aa55', draw:drawTurtle },
-  { name:'Octopus',     icon:'🐙', speed:2.5, size:40, color:'#cc44aa', draw:drawOctopus },
-  { name:'Jellyfish',   icon:'🪼', speed:1.2, size:38, color:'#ee88ff', draw:drawJellyfish },
-  { name:'Shark',       icon:'🦈', speed:5.5, size:70, color:'#6688aa', draw:drawShark },
-  { name:'Seahorse',    icon:'🐴', speed:1,   size:30, color:'#ffaa00', draw:drawSeahorse },
-  { name:'Manta Ray',   icon:'🟣', speed:3.5, size:80, color:'#334466', draw:drawMantaRay },
-  { name:'Crab',        icon:'🦀', speed:1.5, size:28, color:'#cc2200', draw:drawCrab },
-  { name:'Dolphin',     icon:'🐬', speed:6,   size:60, color:'#4488bb', draw:drawDolphin },
-  { name:'Puffer Fish', icon:'🐡', speed:2,   size:30, color:'#ddaa22', draw:drawPuffer },
-  { name:'Anemone',     icon:'🌺', speed:0.5, size:34, color:'#ff4488', draw:drawAnemone },
-  { name:'Anglerfish',  icon:'🎣', speed:2,   size:45, color:'#221133', draw:drawAnglerfish },
-  { name:'Starfish',    icon:'⭐', speed:0.8, size:26, color:'#ff8800', draw:drawStarfish },
-  { name:'Squid',       icon:'🦑', speed:4,   size:44, color:'#aa66cc', draw:drawSquid },
+  { name:'Clownfish',   icon:'🐠', speed:3,   size:22, color:'#ff6600', drawFn:drawClownfish },
+  { name:'Blue Tang',   icon:'🐟', speed:4,   size:24, color:'#1166ff', drawFn:drawBlueTang },
+  { name:'Sea Turtle',  icon:'🐢', speed:2,   size:50, color:'#33aa55', drawFn:drawTurtle },
+  { name:'Octopus',     icon:'🐙', speed:2.5, size:40, color:'#cc44aa', drawFn:drawOctopus },
+  { name:'Jellyfish',   icon:'🪼', speed:1.2, size:38, color:'#ee88ff', drawFn:drawJellyfish },
+  { name:'Shark',       icon:'🦈', speed:5.5, size:70, color:'#6688aa', drawFn:drawShark },
+  { name:'Seahorse',    icon:'🐴', speed:1,   size:30, color:'#ffaa00', drawFn:drawSeahorse },
+  { name:'Manta Ray',   icon:'🟣', speed:3.5, size:80, color:'#334466', drawFn:drawMantaRay },
+  { name:'Crab',        icon:'🦀', speed:1.5, size:28, color:'#cc2200', drawFn:drawCrab },
+  { name:'Dolphin',     icon:'🐬', speed:6,   size:60, color:'#4488bb', drawFn:drawDolphin },
+  { name:'Puffer Fish', icon:'🐡', speed:2,   size:30, color:'#ddaa22', drawFn:drawPuffer },
+  { name:'Anemone',     icon:'🌺', speed:0.5, size:34, color:'#ff4488', drawFn:drawAnemone },
+  { name:'Anglerfish',  icon:'🎣', speed:2,   size:45, color:'#221133', drawFn:drawAnglerfish },
+  { name:'Starfish',    icon:'⭐', speed:0.8, size:26, color:'#ff8800', drawFn:drawStarfish },
+  { name:'Squid',       icon:'🦑', speed:4,   size:44, color:'#aa66cc', drawFn:drawSquid },
 ];
 
 // ─── DRAWING FUNCTIONS ────────────────────────────────────────────────────────
@@ -615,7 +610,12 @@ function drawSquid(ctx, x, y, size, angle, t, flipX) {
 // ─── ENTITY SYSTEM ────────────────────────────────────────────────────────────
 class Entity {
   constructor(def, x, y) {
-    Object.assign(this, def);
+    this.name = def.name;
+    this.icon = def.icon;
+    this.speed = def.speed;
+    this.size = def.size;
+    this.color = def.color;
+    this.drawFn = def.drawFn;
     this.x = x; this.y = y;
     this.vx = (Math.random()-0.5)*2;
     this.vy = (Math.random()-0.5)*2;
@@ -827,7 +827,7 @@ class Entity {
         ctx.rotate(this.spinAngle);
         ctx.translate(-(sx+ox), -this.y);
       }
-      this.draw_fn(ctx, sx+ox, this.y, this.size, this.angle, t, this.flipX);
+      this.drawFn(ctx, sx+ox, this.y, this.size, this.angle, t, this.flipX);
       ctx.restore();
     };
     drawOne(0);
@@ -854,9 +854,7 @@ function spawnEntities() {
   for (const def of ANIMAL_DEFS) {
     const count = counts[def.name] || 2;
     for (let i=0;i<count;i++) {
-      const e = new Entity(def, Math.random()*WORLD_WIDTH, 60+Math.random()*(H-120));
-      e.draw_fn = def.draw;
-      entities.push(e);
+      entities.push(new Entity(def, Math.random()*WORLD_WIDTH, 60+Math.random()*(H-120)));
     }
   }
 }
@@ -1010,14 +1008,13 @@ window.addEventListener('keydown',e=>keys[e.key]=true);
 window.addEventListener('keyup',e=>keys[e.key]=false);
 
 let joystickActive=false, joystickX=0, joystickY=0;
-let joystickStartX=0, joystickStartY=0;
 const joyArea=document.getElementById('joystick-area');
 const joyThumb=document.getElementById('joystick-thumb');
 
 function joystickEvent(type, clientX, clientY) {
   const rect=joyArea.getBoundingClientRect();
   const cx=rect.left+rect.width/2, cy=rect.top+rect.height/2;
-  if (type==='start') { joystickActive=true; joystickStartX=clientX; joystickStartY=clientY; }
+  if (type==='start') { joystickActive=true; }
   if (type==='move' && joystickActive) {
     const dx=clientX-cx, dy=clientY-cy;
     const d=Math.sqrt(dx*dx+dy*dy), maxR=40;
@@ -1068,9 +1065,7 @@ function updatePlayer(dt) {
   playerDashCooldown-=dt;
 
   // Smooth camera
-  const targetCX=p.x-canvas.width/2, targetCY=p.y-canvas.height/2;
-  camX+=(targetCX-camX)*0.08;
-  camY=0;
+  camX += (p.x - canvas.width/2 - camX)*0.08;
 }
 
 function triggerDash() {
@@ -1118,7 +1113,6 @@ function chooseAnimal(def) {
   let found = entities.find(e=>e.name===def.name&&!e.isPlayer);
   if (!found) {
     found=new Entity(def,camX+canvas.width/2,canvas.height/2);
-    found.draw_fn=def.draw;
     entities.push(found);
   }
   if (playerEntity) playerEntity.isPlayer=false;
