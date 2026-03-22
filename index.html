@@ -104,6 +104,8 @@
     transition:all 0.15s; backdrop-filter:blur(4px);
   }
   .action-btn:active { background:rgba(0,100,200,0.8); transform:scale(0.92); }
+  #ui, #joystick-area, #action-btns { transition: opacity 1.5s; }
+  .ui-faded { opacity:0 !important; pointer-events:none !important; }
 </style>
 </head>
 <body>
@@ -148,6 +150,17 @@
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 
+// ─── UI AUTO-HIDE ──────────────────────────────────────────────────────────────
+let lastActivity = Date.now();
+const uiEls = () => [document.getElementById('ui'), document.getElementById('joystick-area'), document.getElementById('action-btns')];
+function onActivity() {
+  lastActivity = Date.now();
+  if (document.getElementById('selector').style.display === 'none') {
+    uiEls().forEach(el => el && el.classList.remove('ui-faded'));
+  }
+}
+['mousemove','mousedown','touchstart','touchmove','keydown'].forEach(ev => window.addEventListener(ev, onActivity, {passive:true}));
+
 // ─── RESIZE ───────────────────────────────────────────────────────────────────
 function resize() {
   canvas.width = window.innerWidth;
@@ -176,6 +189,36 @@ function getZone(x) {
   }
   return zones[0];
 }
+
+// ─── PRE-GENERATED SCENERY ────────────────────────────────────────────────────
+const WEED_COLORS = [
+  '#ff44cc','#cc44ff','#44ffcc','#ff8833','#44ddff',
+  '#ff4477','#aaff44','#ff55ff','#33bbff','#ffdd22',
+  '#ff77aa','#66ff88','#7744ff','#ffaa44','#44ffee',
+];
+const SEAWEED = Array.from({length:130}, (_,i) => ({
+  wx: (i*179 + i*i*7 + 300) % WORLD_WIDTH,
+  h: 55 + Math.abs(Math.sin(i*0.71))*150,
+  color: WEED_COLORS[i % WEED_COLORS.length],
+  color2: WEED_COLORS[(i*3+5) % WEED_COLORS.length],
+  thick: 2.5 + (i%5),
+  wo: i * 0.82,
+  lean: Math.sin(i*13)*0.35,
+}));
+
+const ANEM_COLS = [
+  '#ff44bb','#44ffee','#ff8844','#bb44ff','#ff3355',
+  '#44ff99','#ffee44','#ff88ff','#44bbff','#ff6622',
+];
+const BG_ANEMONES = Array.from({length:75}, (_,i) => ({
+  wx: (i*241 + i*i*11 + 180) % WORLD_WIDTH,
+  size: 16 + Math.abs(Math.sin(i*0.53))*48,
+  c1: ANEM_COLS[i % ANEM_COLS.length],
+  c2: ANEM_COLS[(i*2+3) % ANEM_COLS.length],
+  t: 7 + (i%15),
+  phase: i * 0.66,
+  spread: 0.7 + Math.abs(Math.sin(i*0.37))*0.9,
+}));
 
 // ─── ANIMAL TEMPLATES ─────────────────────────────────────────────────────────
 const ANIMAL_DEFS = [
@@ -664,6 +707,21 @@ class Entity {
     // Per-animal AI
     this.updateAI(t, dt, allEntities, playerEntity);
 
+    // Separation — avoid stacking
+    for (const other of allEntities) {
+      if (other === this) continue;
+      let sdx = this.x - other.x;
+      if (sdx > WORLD_WIDTH/2) sdx -= WORLD_WIDTH;
+      if (sdx < -WORLD_WIDTH/2) sdx += WORLD_WIDTH;
+      const sdy = this.y - other.y;
+      const sd = Math.sqrt(sdx*sdx+sdy*sdy)||1;
+      const minD = (this.size + other.size) * 1.1;
+      if (sd < minD) {
+        const f = (minD - sd) / minD * 0.25;
+        this.vx += (sdx/sd)*f; this.vy += (sdy/sd)*f;
+      }
+    }
+
     // Velocity damping
     const maxV = this.speed * 1.5;
     const spd = Math.sqrt(this.vx*this.vx+this.vy*this.vy);
@@ -678,108 +736,185 @@ class Entity {
     if (this.y<margin) { this.y=margin; this.vy=Math.abs(this.vy); }
     if (this.y>H-margin) { this.y=H-margin; this.vy=-Math.abs(this.vy); }
 
-    if (this.vx < -0.3) this.flipX = true;
-    else if (this.vx > 0.3) this.flipX = false;
+    if (this.vx < -0.3) this.flipX = false;
+    else if (this.vx > 0.3) this.flipX = true;
   }
 
   updateAI(t, dt, allEntities, playerEntity) {
-    // State machine
+    const H = canvas.height;
+    const floorY = H - this.size*2 - 10;
+
+    // ── helper: world-aware dx ──
+    const wdx = (ax, bx) => { let d=ax-bx; if(d>WORLD_WIDTH/2)d-=WORLD_WIDTH; if(d<-WORLD_WIDTH/2)d+=WORLD_WIDTH; return d; };
+
+    // ── per-species hard overrides (no state machine needed for some) ──
+    if (this.name==='Jellyfish') {
+      this.vx *= 0.97;
+      this.vy += Math.sin(t*0.03+this.bobOffset)*0.08;
+      this.vx += (Math.random()-0.5)*0.08;
+      return;
+    }
+    if (this.name==='Starfish') {
+      // Very slow bottom-hugger
+      if (this.y < floorY - 5) this.vy += 0.05;
+      this.vx += (Math.random()-0.5)*this.speed*0.15;
+      this.vx *= 0.97;
+      return;
+    }
+    if (this.name==='Crab') {
+      // Scuttles along the floor
+      if (this.y < floorY) this.vy += 0.2;
+      else { this.y = floorY; this.vy = 0; }
+      if (this.aiTimer <= 0) {
+        this.aiTimer = 60 + Math.random()*120;
+        this.vx = (Math.random()-0.5)*this.speed*2.5;
+      } else { this.aiTimer -= dt; }
+      this.vx *= 0.92;
+      return;
+    }
+    if (this.name==='Seahorse') {
+      // Hovers in place, gentle bob, barely moves horizontally
+      this.vy += Math.sin(t*0.045+this.bobOffset)*0.12;
+      this.vx *= 0.93;
+      if (Math.random()<0.005) this.vx += (Math.random()-0.5)*this.speed*0.6;
+      return;
+    }
+    if (this.name==='Anemone') {
+      // Anchored to bottom, just sway (no movement)
+      if (this.y < floorY) this.vy += 0.15;
+      this.vx *= 0.85; this.vy *= 0.85;
+      return;
+    }
+
+    // ── state machine for remaining species ──
     if (this.aiTimer <= 0) {
-      this.aiTimer = 80 + Math.random()*200;
-      // Choose new state
+      this.aiTimer = 80 + Math.random()*220;
       const r = Math.random();
       if (this.name==='Shark') {
-        this.aiState = r<0.6?'chase':'wander';
-        this.target = allEntities.filter(e=>!e.isPlayer&&e.name!=='Shark')[Math.floor(Math.random()*allEntities.length)];
+        this.aiState = 'chase';
+        const prey = allEntities.filter(e=>e!==this&&e.name!=='Shark'&&!e.isPlayer);
+        if (prey.length>0) this.target = prey[Math.floor(Math.random()*prey.length)];
       } else if (this.name==='Dolphin') {
-        this.aiState = r<0.4?'leap':r<0.7?'follow':'wander';
+        this.aiState = r<0.35?'leap':r<0.7?'school':'wander';
       } else if (this.name==='Octopus') {
-        this.aiState = r<0.3?'ink':r<0.6?'sneak':'wander';
-      } else if (this.name==='Jellyfish') {
-        this.aiState = 'drift';
-      } else if (this.name==='Seahorse') {
-        this.aiState = r<0.5?'hover':'wander';
-      } else if (this.name==='Crab') {
-        this.aiState = r<0.4?'scuttle':'rest';
+        this.aiState = r<0.5?'bottom_creep':'wander';
+      } else if (this.name==='Manta Ray') {
+        this.aiState = r<0.4?'sweep':'wander';
+        if (!this._sweepDir) this._sweepDir = Math.random()<0.5?1:-1;
       } else if (this.name==='Anglerfish') {
-        this.aiState = r<0.5?'lure':'stalk';
+        this.aiState = r<0.6?'lure':'stalk';
+      } else if (this.name==='Clownfish') {
+        this.aiState = r<0.5?'seek_anemone':'school';
+      } else if (this.name==='Squid') {
+        this.aiState = r<0.4?'jet':'school';
       } else {
-        this.aiState = r<0.5?'wander':r<0.75?'school':'explore';
+        this.aiState = r<0.45?'wander':r<0.75?'school':'explore';
       }
-    }
+    } else { this.aiTimer -= dt; }
 
     switch (this.aiState) {
       case 'wander':
-        if (Math.random()<0.02) {
-          this.vx += (Math.random()-0.5)*this.speed*0.8;
+        if (Math.random()<0.025) {
+          this.vx += (Math.random()-0.5)*this.speed*0.9;
           this.vy += (Math.random()-0.5)*this.speed*0.5;
         }
         break;
-      case 'chase':
-        if (this.target && this.target!==this) {
-          const dx=this.target.x-this.x, dy=this.target.y-this.y;
+
+      case 'chase': {
+        // Shark chases prey; pick new target if close or gone
+        if (!this.target || this.target===this) {
+          const prey = allEntities.filter(e=>e!==this&&e.name!=='Shark'&&!e.isPlayer);
+          if (prey.length>0) this.target = prey[Math.floor(Math.random()*prey.length)];
+        }
+        if (this.target) {
+          const dx=wdx(this.target.x,this.x), dy=this.target.y-this.y;
           const d=Math.sqrt(dx*dx+dy*dy)||1;
-          this.vx+=dx/d*this.speed*0.15; this.vy+=dy/d*this.speed*0.08;
+          this.vx+=dx/d*this.speed*0.2; this.vy+=dy/d*this.speed*0.1;
+          // Caught — pick new target
+          if (d<this.size*1.8) {
+            const prey2=allEntities.filter(e=>e!==this&&e.name!=='Shark'&&!e.isPlayer&&e!==this.target);
+            this.target=prey2.length>0?prey2[Math.floor(Math.random()*prey2.length)]:null;
+          }
         }
         break;
+      }
+
       case 'school': {
-        const near=allEntities.filter(e=>e!==this&&e.name===this.name&&Math.abs(e.x-this.x)<250&&Math.abs(e.y-this.y)<150);
+        const near=allEntities.filter(e=>e!==this&&e.name===this.name&&Math.abs(wdx(e.x,this.x))<280&&Math.abs(e.y-this.y)<160);
         if (near.length>0) {
           const cx=near.reduce((s,e)=>s+e.x,0)/near.length;
           const cy=near.reduce((s,e)=>s+e.y,0)/near.length;
           const mvx=near.reduce((s,e)=>s+e.vx,0)/near.length;
           const mvy=near.reduce((s,e)=>s+e.vy,0)/near.length;
-          this.vx+=(cx-this.x)*0.003+(mvx-this.vx)*0.05;
-          this.vy+=(cy-this.y)*0.003+(mvy-this.vy)*0.05;
+          const ddx=wdx(cx,this.x);
+          this.vx+=ddx*0.003+(mvx-this.vx)*0.04;
+          this.vy+=(cy-this.y)*0.003+(mvy-this.vy)*0.04;
         } else { this.aiState='wander'; }
         break;
       }
+
+      case 'seek_anemone': {
+        // Clownfish circles nearest Anemone entity
+        const anemones=allEntities.filter(e=>e.name==='Anemone');
+        if (anemones.length>0) {
+          if (!this._homeAnem) this._homeAnem=anemones[Math.floor(Math.random()*anemones.length)];
+          const ha=this._homeAnem;
+          const dx=wdx(ha.x,this.x), dy=ha.y-this.y;
+          const d=Math.sqrt(dx*dx+dy*dy)||1;
+          if (d>this.size*4) {
+            this.vx+=dx/d*this.speed*0.12; this.vy+=dy/d*this.speed*0.1;
+          } else {
+            // orbit it
+            this.vx+=(-dy/d)*this.speed*0.15;
+            this.vy+=(dx/d)*this.speed*0.15;
+          }
+        } else { this.aiState='school'; }
+        break;
+      }
+
+      case 'leap': // Dolphin
+        if (Math.random()<0.008) { this.vy-=this.speed*2; this.vx+=(Math.random()-0.5)*this.speed*1.5; }
+        this.vx += (Math.random()-0.5)*this.speed*0.2;
+        break;
+
+      case 'bottom_creep': // Octopus slinks to seafloor, explores rocks
+        if (this.y < floorY - 20) this.vy += 0.18;
+        this.vx += (Math.random()-0.5)*this.speed*0.6;
+        this.vx *= 0.95;
+        break;
+
+      case 'sweep': // Manta Ray wide arc
+        this._sweepPhase = (this._sweepPhase||0) + 0.012*dt;
+        this.vx = Math.cos(this._sweepPhase) * this.speed * (this._sweepDir||1);
+        this.vy = Math.sin(this._sweepPhase*0.5) * this.speed * 0.4;
+        break;
+
+      case 'jet': // Squid jets backwards
+        if (Math.random()<0.01) { this.vx-=this.vx*2; this.vy-=this.speed*1.2; }
+        this.vx += (Math.random()-0.5)*this.speed*0.3;
+        break;
+
       case 'explore':
-        this.vx += (Math.random()-0.5)*this.speed*0.5;
-        this.vy += (Math.random()-0.5)*this.speed*0.3;
+        this.vx += (Math.random()-0.5)*this.speed*0.6;
+        this.vy += (Math.random()-0.5)*this.speed*0.35;
         break;
-      case 'drift':
-        this.vx*=0.98; this.vy += (Math.random()-0.5)*0.2;
+
+      case 'lure': // Anglerfish — near bottom, barely moves
+        if (this.y < floorY - 30) this.vy += 0.1;
+        this.vx *= 0.93; this.vy *= 0.93;
         break;
-      case 'hover':
-        this.vy += Math.sin(t*0.05+this.bobOffset)*0.1; this.vx*=0.95;
-        break;
-      case 'leap':
-        if (Math.random()<0.01) {
-          this.vy-=this.speed*1.5; this.vx+=(Math.random()-0.5)*this.speed*2;
-        }
-        break;
-      case 'rest':
-        this.vx*=0.92; this.vy*=0.92;
-        break;
-      case 'scuttle':
-        this.vx+=(Math.random()-0.5)*this.speed*1.2; this.vy*=0.9;
-        break;
-      case 'sneak':
-        if (playerEntity) {
-          const dx=playerEntity.x-this.x, dy=playerEntity.y-this.y;
+
+      case 'stalk': {
+        // Anglerfish slowly follows nearest fish
+        const prey=allEntities.filter(e=>e!==this&&e.name!=='Anglerfish'&&!e.isPlayer);
+        if (prey.length>0) {
+          if (!this.target||Math.random()<0.01) this.target=prey[Math.floor(Math.random()*prey.length)];
+          const dx=wdx(this.target.x,this.x), dy=this.target.y-this.y;
           const d=Math.sqrt(dx*dx+dy*dy)||1;
-          if (d>200) { this.vx+=dx/d*this.speed*0.05; this.vy+=dy/d*this.speed*0.05; }
-          else { this.vx-=dx/d*this.speed*0.1; this.vy-=dy/d*0.1; }
+          if (d>80) { this.vx+=dx/d*this.speed*0.04; this.vy+=dy/d*0.03; }
         }
         break;
-      case 'lure':
-        this.vx*=0.9; this.vy*=0.9;
-        break;
-      case 'stalk':
-        if (playerEntity) {
-          const dx=playerEntity.x-this.x, dy=playerEntity.y-this.y;
-          const d=Math.sqrt(dx*dx+dy*dy)||1;
-          this.vx+=dx/d*this.speed*0.05; this.vy+=dy/d*0.04;
-        }
-        break;
-      case 'follow':
-        if (playerEntity) {
-          const dx=playerEntity.x-this.x, dy=playerEntity.y-this.y;
-          const d=Math.sqrt(dx*dx+dy*dy)||1;
-          if (d>150) { this.vx+=dx/d*this.speed*0.1; this.vy+=dy/d*0.08; }
-        }
-        break;
+      }
     }
   }
 
@@ -839,7 +974,6 @@ let entities = [];
 let playerEntity = null;
 let isAIMode = false;
 let aiFollowEntity = null;
-let aiSwitchTimer = 0;
 
 function spawnEntities() {
   entities = [];
@@ -958,6 +1092,75 @@ function drawBackground(t) {
   }
   ctx.lineTo(W,H); ctx.closePath(); ctx.fill();
   ctx.restore();
+
+  // ── Colorful seaweed (all over the tank) ──────────────────────────────────
+  for (const sw of SEAWEED) {
+    let sx = ((sw.wx - camX) % WORLD_WIDTH + WORLD_WIDTH) % WORLD_WIDTH;
+    if (sx < -60 || sx > W+60) continue;
+    const baseY = H - 8;
+    ctx.save();
+    ctx.lineWidth = sw.thick;
+    ctx.lineCap = 'round';
+    const segs = 9;
+    // Draw each strand
+    for (let strand=0; strand<2; strand++) {
+      const so = strand*0.4;
+      ctx.strokeStyle = strand===0 ? sw.color : sw.color2;
+      ctx.globalAlpha = 0.82;
+      ctx.beginPath();
+      for (let s=0; s<=segs; s++) {
+        const frac = s/segs;
+        const py = baseY - sw.h * frac;
+        const px = sx + sw.lean*sw.h*frac*0.6 + Math.sin(t*0.028 + sw.wo + so + frac*3.2)*16*frac;
+        if (s===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+    // Tip leaf
+    const tipFrac = 1, tipY = baseY - sw.h;
+    const tipX = sx + sw.lean*sw.h*0.6 + Math.sin(t*0.028 + sw.wo + tipFrac*3.2)*16;
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = sw.color;
+    ctx.beginPath();
+    ctx.ellipse(tipX, tipY, sw.thick*2.2, sw.thick*3.5, sw.lean, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ── Background anemones on seafloor ──────────────────────────────────────
+  for (const an of BG_ANEMONES) {
+    let ax = ((an.wx - camX) % WORLD_WIDTH + WORLD_WIDTH) % WORLD_WIDTH;
+    if (ax < -80 || ax > W+80) continue;
+    const ay = H - 8;
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+    // base bulb
+    ctx.fillStyle = an.c2;
+    ctx.beginPath();
+    ctx.ellipse(ax, ay, an.size*0.38, an.size*0.14, 0, 0, Math.PI*2);
+    ctx.fill();
+    // tentacles
+    for (let i=0; i<an.t; i++) {
+      const frac = i/(an.t-1||1);
+      const a = (frac - 0.5) * Math.PI * an.spread;
+      const wave = Math.sin(t*0.033 + an.phase + i*0.52) * an.size*0.22;
+      ctx.strokeStyle = i%2===0 ? an.c1 : an.c2;
+      ctx.lineWidth = an.size*0.1;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      const mx = ax + Math.sin(a)*an.size*0.7 + wave;
+      const my = ay - Math.cos(a)*an.size*0.85;
+      ctx.quadraticCurveTo(ax + Math.sin(a)*an.size*0.35+wave*0.5, ay-an.size*0.35, mx, my);
+      ctx.stroke();
+      // tip ball
+      ctx.fillStyle = i%2===0 ? an.c2 : an.c1;
+      ctx.beginPath();
+      ctx.arc(mx, my, an.size*0.09, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
 }
 
 function drawCoralBranch(ctx, x, y, h, angle, depth) {
@@ -1045,7 +1248,7 @@ function updatePlayer(dt) {
   if (keys['ArrowDown']||keys['s']) dy+=1;
   dx+=joystickX; dy+=joystickY;
 
-  if (dx<-0.1) p.flipX=true; else if (dx>0.1) p.flipX=false;
+  if (dx<-0.1) p.flipX=false; else if (dx>0.1) p.flipX=true;
 
   if (playerDashing) { dx*=3.5; dy*=3.5; }
 
@@ -1105,8 +1308,6 @@ let autoPan=false, autoPanV=1.5;
 function pickAICreature() {
   if (entities.length === 0) return;
   aiFollowEntity = entities[Math.floor(Math.random()*entities.length)];
-  aiSwitchTimer = 600 + Math.floor(Math.random()*600); // 10-20s at 60fps
-  // Snap camera to creature immediately
   camX = aiFollowEntity.x - canvas.width/2;
   document.getElementById('hud-animal').textContent = aiFollowEntity.icon + ' ' + aiFollowEntity.name;
   document.getElementById('hud-mode').textContent = 'AI Watch';
@@ -1183,9 +1384,6 @@ function loop() {
       // Smoothly track the chosen creature
       const targetCamX = aiFollowEntity.x - canvas.width/2;
       camX += (targetCamX - camX) * 0.04 * speedMult;
-      // Periodically switch to a different random creature
-      aiSwitchTimer -= dt;
-      if (aiSwitchTimer <= 0) pickAICreature();
     }
   } else if (playerEntity) {
     updatePlayer(dt);
@@ -1222,6 +1420,13 @@ function loop() {
   }
 
   updateHUD();
+
+  // UI auto-hide after 15s of inactivity (not on selector screen)
+  if (document.getElementById('selector').style.display === 'none') {
+    if (Date.now() - lastActivity > 15000) {
+      uiEls().forEach(el => el && el.classList.add('ui-faded'));
+    }
+  }
 
   // Player spin overlay
   if (playerEntity && playerSpin>0) {
