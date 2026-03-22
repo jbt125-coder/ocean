@@ -177,9 +177,32 @@ let camX = 0;
 // ─── ATMOSPHERE STATE ─────────────────────────────────────────────────────────
 let bgCycleT = 0;         // slowly increments → hue cycling
 let neonMode  = false;
+let neonFade  = 0;        // 0=normal, 1=full neon — transitions slowly
 let neonTimer = 0;
 let neonTriggerT = 10800 + Math.random()*7200; // first neon: 3-5 min
 let lastChosenDef = null; // which animal the user last picked
+
+// ─── EAT PARTICLE SYSTEM ──────────────────────────────────────────────────────
+let eatParticles = []; // {x,y,vx,vy,r,alpha,color}
+function spawnEatParticles(x, y, color) {
+  for (let i = 0; i < 12; i++) {
+    const a = (i/12)*Math.PI*2 + Math.random()*0.3;
+    const spd = 2 + Math.random()*4;
+    eatParticles.push({ x, y, vx:Math.cos(a)*spd, vy:Math.sin(a)*spd,
+      r:3+Math.random()*5, alpha:1, color });
+  }
+  // central flash ring
+  eatParticles.push({ x, y, vx:0, vy:0, r:2, alpha:1.2, color:'#fff', ring:true, maxR:35 });
+}
+
+// ─── PREDATOR-PREY CONFIG ─────────────────────────────────────────────────────
+const PREDATOR_PREY = {
+  'Sea Turtle':  { prey:['Jellyfish'],                        range:1.6, cooldown:600 },
+  'Shark':       { prey:['Clownfish','Blue Tang','Seahorse','Puffer Fish'], range:2.0, cooldown:360 },
+  'Dolphin':     { prey:['Squid'],                            range:2.0, cooldown:480 },
+  'Octopus':     { prey:['Crab'],                             range:1.8, cooldown:500 },
+  'Anglerfish':  { prey:['Clownfish','Blue Tang'],             range:2.5, cooldown:420 },
+};
 
 // ─── ZONES ────────────────────────────────────────────────────────────────────
 const zones = [
@@ -726,14 +749,61 @@ class Entity {
     this.groupTarget = null;
     this.bobOffset = Math.random()*Math.PI*2;
     this.colorCycle = Math.random()*Math.PI*2;
+    // size/marking variation
+    this.sizeScale = 1;
+    this.colorVariant = 0; // 0-5 → hue offset degrees
+    // eating system
+    this.eatCooldown = Math.random()*300; // stagger initial cooldowns
+    this.beingEaten = false;
+    this.beingEatenTimer = 0;
+    this.eatLungeTimer = 0; // predator lunge flash
+    // AI speed modulation
+    this._acmPhase = Math.random()*Math.PI*2; // slowly oscillates cruise speed
   }
 
   update(t, dt, allEntities, playerEntity) {
     if (this.isPlayer) return;
+    // Handle being-eaten animation (prey shrinks then respawns)
+    if (this.beingEaten) {
+      this.beingEatenTimer -= dt;
+      if (this.beingEatenTimer <= 0) {
+        // Respawn far from current position
+        this.x = (this.x + WORLD_WIDTH/2 + Math.random()*2000 - 1000) % WORLD_WIDTH;
+        this.y = 80 + Math.random() * (canvas.height - 160);
+        this.vx = (Math.random()-0.5)*2; this.vy = (Math.random()-0.5)*2;
+        this.beingEaten = false;
+      }
+      return;
+    }
     if (this.dancing) { this.updateDance(t); return; }
     this.aiTimer -= dt;
     this.dashCooldown -= dt;
     this.scaredTimer -= dt;
+    this.eatCooldown -= dt;
+    this.eatLungeTimer -= dt;
+
+    // ── Predator eating check ─────────────────────────────────────────────────
+    const ppDef = PREDATOR_PREY[this.name];
+    if (ppDef && this.eatCooldown <= 0) {
+      for (const other of allEntities) {
+        if (other === this || other.isPlayer || other.beingEaten) continue;
+        if (!ppDef.prey.includes(other.name)) continue;
+        let dx = other.x - this.x;
+        if (dx > WORLD_WIDTH/2) dx -= WORLD_WIDTH;
+        if (dx < -WORLD_WIDTH/2) dx += WORLD_WIDTH;
+        const dy = other.y - this.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < (this.size + other.size) * ppDef.range) {
+          // EATING EVENT
+          spawnEatParticles(other.x, other.y, other.color);
+          other.beingEaten = true;
+          other.beingEatenTimer = 50; // 50 frames before respawn
+          this.eatCooldown = ppDef.cooldown;
+          this.eatLungeTimer = 18; // brief lunge flash on predator
+          break;
+        }
+      }
+    }
 
     // Shark scares others
     if (playerEntity && playerEntity.name==='Shark') {
@@ -771,7 +841,7 @@ class Entity {
     }
 
     // Velocity damping
-    const maxV = this.speed * 1.5;
+    const maxV = this.speed * 2.5;
     const spd = Math.sqrt(this.vx*this.vx+this.vy*this.vy);
     if (spd>maxV) { this.vx=(this.vx/spd)*maxV; this.vy=(this.vy/spd)*maxV; }
     this.vx*=0.96; this.vy*=0.96;
@@ -806,7 +876,10 @@ class Entity {
         this._playT = 0; this._playTgt = null;
         this._bStep = null; this._bHold = 0;
       }
-      const CRUISE = 1.6, EAST_PX = 700, BACK_PX = 105;
+      // Slowly varying cruise speed — 4-6 on 1-10 scale
+      this._acmPhase += 0.0005 * dt;
+      const CRUISE = 3.8 + Math.sin(this._acmPhase) * 0.6; // 3.2–4.4, slow vary
+      const EAST_PX = 1100, BACK_PX = 160;
       this._breathT -= dt; this._bubbleT -= dt;
       if (this._playT > 0) this._playT -= dt;
 
@@ -907,15 +980,18 @@ class Entity {
     // ── Watched-entity patrol (non-dolphin AI watch mode) ──
     if (isAIMode && this===aiFollowEntity && this.name!=='Dolphin') {
       if(!this._ws){this._ws='east';this._wt=0;}
-      const cs=Math.min(this.speed,2.8)*0.5;
-      const ep=400+this.speed*55, bp=65+this.speed*8;
+      // Speed 4-6 on 1-10 scale with slow oscillation
+      this._acmPhase += 0.0006 * dt;
+      const speedMod = 1.25 + Math.sin(this._acmPhase) * 0.2; // 1.05–1.45, slow vary
+      const cs = Math.min(this.speed, 4.0) * speedMod;
+      const ep=600+this.speed*80, bp=100+this.speed*14;
       this._wt+=Math.abs(this.vx);
       if(this._ws==='east'){
-        this.vx+=(cs-this.vx)*0.04;
+        this.vx+=(cs-this.vx)*0.045;
         this.vy+=Math.sin(t*0.033+this.bobOffset)*0.1;
         if(this._wt>=ep){this._wt=0;this._ws='back';}
       } else {
-        this.vx+=(-cs-this.vx)*0.04;
+        this.vx+=(-cs-this.vx)*0.045;
         this.vy+=Math.sin(t*0.033+this.bobOffset)*0.08;
         if(this._wt>=bp){this._wt=0;this._ws='east';}
       }
@@ -986,9 +1062,9 @@ class Entity {
 
     switch (this.aiState) {
       case 'wander':
-        if (Math.random()<0.025) {
-          this.vx += (Math.random()-0.5)*this.speed*0.9;
-          this.vy += (Math.random()-0.5)*this.speed*0.5;
+        if (Math.random()<0.03) {
+          this.vx += (Math.random()-0.5)*this.speed*1.8;
+          this.vy += (Math.random()-0.5)*this.speed*0.9;
         }
         break;
 
@@ -1062,8 +1138,8 @@ class Entity {
         break;
 
       case 'explore':
-        this.vx += (Math.random()-0.5)*this.speed*0.6;
-        this.vy += (Math.random()-0.5)*this.speed*0.35;
+        this.vx += (Math.random()-0.5)*this.speed*1.2;
+        this.vy += (Math.random()-0.5)*this.speed*0.7;
         break;
 
       case 'lure': // Anglerfish — near bottom, barely moves
@@ -1118,7 +1194,9 @@ class Entity {
   }
 
   draw(ctx, t) {
+    if (this.beingEaten) return; // handled by eat particles
     const sx = this.x - camX;
+    const drawSize = this.size * this.sizeScale;
     // wrap draw
     const drawOne = (ox) => {
       ctx.save();
@@ -1127,12 +1205,26 @@ class Entity {
         ctx.rotate(this.spinAngle);
         ctx.translate(-(sx+ox), -this.y);
       }
-      this.drawFn(ctx, sx+ox, this.y, this.size, this.angle, t, this.flipX);
+      // Color variant via hue-rotate filter
+      if (this.colorVariant !== 0) {
+        ctx.filter = `hue-rotate(${this.colorVariant}deg) saturate(1.15)`;
+      }
+      this.drawFn(ctx, sx+ox, this.y, drawSize, this.angle, t, this.flipX);
+      ctx.filter = 'none';
+
+      // Predator lunge flash
+      if (this.eatLungeTimer > 0) {
+        const lungeAlpha = (this.eatLungeTimer / 18) * 0.5;
+        ctx.globalAlpha = lungeAlpha;
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(sx+ox, this.y, drawSize*1.3, 0, Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
       ctx.restore();
     };
     drawOne(0);
-    if (sx < this.size*2) drawOne(WORLD_WIDTH);
-    if (sx > canvas.width-this.size*2) drawOne(-WORLD_WIDTH);
+    if (sx < drawSize*2) drawOne(WORLD_WIDTH);
+    if (sx > canvas.width-drawSize*2) drawOne(-WORLD_WIDTH);
   }
 }
 
@@ -1153,10 +1245,18 @@ function spawnEntities() {
     'Dolphin':2,'Puffer Fish':3,'Anemone':3,'Anglerfish':2,
     'Starfish':3,'Squid':3
   };
+  // Predefined size scales and hue variants per slot so they're always distinct
+  const sizeScales  = [1.0, 0.78, 1.18, 0.88, 1.08];
+  const hueVariants = [0, 55, 120, 185, 250]; // degrees hue-rotate
   for (const def of ANIMAL_DEFS) {
     const count = counts[def.name] || 2;
     for (let i=0;i<count;i++) {
-      entities.push(new Entity(def, Math.random()*WORLD_WIDTH, 60+Math.random()*(H-120)));
+      const e = new Entity(def, Math.random()*WORLD_WIDTH, 60+Math.random()*(H-120));
+      if (count > 1) {
+        e.sizeScale   = sizeScales[i % sizeScales.length];
+        e.colorVariant = hueVariants[i % hueVariants.length];
+      }
+      entities.push(e);
     }
   }
 }
@@ -1363,10 +1463,10 @@ function drawBackground(t) {
     ctx.restore();
   }
 
-  // ── Neon blacklight overlay (drawn last, on top of everything bg) ─────────
-  if(neonMode){
-    ctx.save(); ctx.globalAlpha=0.72;
-    ctx.fillStyle='rgba(0,0,8,0.72)'; ctx.fillRect(0,0,W,H);
+  // ── Neon dark overlay — fades in/out slowly with neonFade ────────────────
+  if(neonFade > 0){
+    ctx.save(); ctx.globalAlpha = neonFade * 0.72;
+    ctx.fillStyle='rgba(0,0,8,0.85)'; ctx.fillRect(0,0,W,H);
     ctx.restore();
   }
 }
@@ -1856,6 +1956,11 @@ function loop() {
   neonTriggerT -= dt;
   if(neonTriggerT<=0 && !neonMode){ neonMode=true; neonTimer=7200; neonTriggerT=10800+Math.random()*7200; }
   if(neonMode){ neonTimer-=dt; if(neonTimer<=0) neonMode=false; }
+  // Slowly fade neonFade toward target (0 or 1)
+  const NEON_FADE_SPEED = 0.0025;
+  neonFade = neonMode
+    ? Math.min(1, neonFade + NEON_FADE_SPEED * dt)
+    : Math.max(0, neonFade - NEON_FADE_SPEED * dt);
 
   drawBackground(t);
 
@@ -1880,17 +1985,57 @@ function loop() {
     e.draw(ctx, t);
   }
 
-  // ── Neon mode: glowing halos around all creatures ─────────────────────────
-  if(neonMode){
+  // ── Neon mode: screen-blend color overlay on all creatures (slow fade) ────
+  if(neonFade > 0){
     for(const e of sorted){
-      const sx=e.x-camX;
-      if(sx<-e.size*3||sx>canvas.width+e.size*3) continue;
+      if(e.beingEaten) continue;
+      const sx = e.x - camX;
+      const ds = e.size * e.sizeScale;
+      if(sx < -ds*3 || sx > canvas.width+ds*3) continue;
       ctx.save();
-      const nh=`hsl(${(e.x*0.02+t*0.1)%360},100%,60%)`;
-      ctx.globalAlpha=0.55+Math.sin(t*0.08+e.bobOffset)*0.2;
-      ctx.strokeStyle=nh; ctx.lineWidth=3;
-      ctx.shadowColor=nh; ctx.shadowBlur=22;
-      ctx.beginPath(); ctx.arc(sx,e.y,e.size*1.25,0,Math.PI*2); ctx.stroke();
+      ctx.globalCompositeOperation = 'screen';
+      const nh = `hsl(${(e.x*0.02 + t*0.07)%360},100%,55%)`;
+      ctx.globalAlpha = neonFade * (0.45 + Math.sin(t*0.06+e.bobOffset)*0.12);
+      ctx.fillStyle = nh;
+      // Ellipse tinted over the animal body shape (not a circle border)
+      ctx.beginPath();
+      ctx.ellipse(sx, e.y, ds*1.05, ds*0.65, 0, 0, Math.PI*2);
+      ctx.fill();
+      // Soft glow halo
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = neonFade * 0.3;
+      ctx.shadowColor = nh; ctx.shadowBlur = 28;
+      ctx.strokeStyle = nh; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, e.y, ds*1.1, 0, Math.PI*2); ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    }
+  }
+
+  // ── Eat particles ──────────────────────────────────────────────────────────
+  for (let i = eatParticles.length-1; i >= 0; i--) {
+    const p = eatParticles[i];
+    if (p.ring) {
+      // expanding ring flash
+      p.r = Math.min(p.r + 2.2, p.maxR);
+      p.alpha -= 0.045;
+      if (p.alpha <= 0) { eatParticles.splice(i,1); continue; }
+      const sx = p.x - camX;
+      ctx.save(); ctx.globalAlpha = Math.max(0, p.alpha);
+      ctx.strokeStyle = p.color; ctx.lineWidth = 3;
+      ctx.shadowColor = p.color; ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.arc(sx, p.y, p.r, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
+    } else {
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.90; p.vy *= 0.90;
+      p.alpha -= 0.028; p.r *= 0.97;
+      if (p.alpha <= 0 || p.r < 0.5) { eatParticles.splice(i,1); continue; }
+      const sx = p.x - camX;
+      ctx.save(); ctx.globalAlpha = p.alpha;
+      ctx.fillStyle = p.color;
+      ctx.shadowColor = p.color; ctx.shadowBlur = 8;
+      ctx.beginPath(); ctx.arc(sx, p.y, p.r, 0, Math.PI*2); ctx.fill();
       ctx.restore();
     }
   }
