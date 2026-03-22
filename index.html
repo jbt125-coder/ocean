@@ -191,8 +191,6 @@ function spawnEatParticles(x, y, color) {
     eatParticles.push({ x, y, vx:Math.cos(a)*spd, vy:Math.sin(a)*spd,
       r:3+Math.random()*5, alpha:1, color });
   }
-  // central flash ring
-  eatParticles.push({ x, y, vx:0, vy:0, r:2, alpha:1.2, color:'#fff', ring:true, maxR:35 });
 }
 
 // ─── PREDATOR-PREY CONFIG ─────────────────────────────────────────────────────
@@ -1212,14 +1210,6 @@ class Entity {
       this.drawFn(ctx, sx+ox, this.y, drawSize, this.angle, t, this.flipX);
       ctx.filter = 'none';
 
-      // Predator lunge flash
-      if (this.eatLungeTimer > 0) {
-        const lungeAlpha = (this.eatLungeTimer / 18) * 0.5;
-        ctx.globalAlpha = lungeAlpha;
-        ctx.fillStyle = '#fff';
-        ctx.beginPath(); ctx.arc(sx+ox, this.y, drawSize*1.3, 0, Math.PI*2); ctx.fill();
-        ctx.globalAlpha = 1;
-      }
       ctx.restore();
     };
     drawOne(0);
@@ -1985,59 +1975,22 @@ function loop() {
     e.draw(ctx, t);
   }
 
-  // ── Neon mode: screen-blend color overlay on all creatures (slow fade) ────
-  if(neonFade > 0){
-    for(const e of sorted){
-      if(e.beingEaten) continue;
-      const sx = e.x - camX;
-      const ds = e.size * e.sizeScale;
-      if(sx < -ds*3 || sx > canvas.width+ds*3) continue;
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      const nh = `hsl(${(e.x*0.02 + t*0.07)%360},100%,55%)`;
-      ctx.globalAlpha = neonFade * (0.45 + Math.sin(t*0.06+e.bobOffset)*0.12);
-      ctx.fillStyle = nh;
-      // Ellipse tinted over the animal body shape (not a circle border)
-      ctx.beginPath();
-      ctx.ellipse(sx, e.y, ds*1.05, ds*0.65, 0, 0, Math.PI*2);
-      ctx.fill();
-      // Soft glow halo
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = neonFade * 0.3;
-      ctx.shadowColor = nh; ctx.shadowBlur = 28;
-      ctx.strokeStyle = nh; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(sx, e.y, ds*1.1, 0, Math.PI*2); ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.restore();
-    }
-  }
+  // ── Neon mode: hue-shift filter applied per-entity via colorVariant;
+  //    the dark overlay in drawBackground already shifts the palette.
+  //    No extra shapes drawn on top of animals. ──────────────────────────────
 
   // ── Eat particles ──────────────────────────────────────────────────────────
   for (let i = eatParticles.length-1; i >= 0; i--) {
     const p = eatParticles[i];
-    if (p.ring) {
-      // expanding ring flash
-      p.r = Math.min(p.r + 2.2, p.maxR);
-      p.alpha -= 0.045;
-      if (p.alpha <= 0) { eatParticles.splice(i,1); continue; }
-      const sx = p.x - camX;
-      ctx.save(); ctx.globalAlpha = Math.max(0, p.alpha);
-      ctx.strokeStyle = p.color; ctx.lineWidth = 3;
-      ctx.shadowColor = p.color; ctx.shadowBlur = 14;
-      ctx.beginPath(); ctx.arc(sx, p.y, p.r, 0, Math.PI*2); ctx.stroke();
-      ctx.restore();
-    } else {
-      p.x += p.vx; p.y += p.vy;
-      p.vx *= 0.90; p.vy *= 0.90;
-      p.alpha -= 0.028; p.r *= 0.97;
-      if (p.alpha <= 0 || p.r < 0.5) { eatParticles.splice(i,1); continue; }
-      const sx = p.x - camX;
-      ctx.save(); ctx.globalAlpha = p.alpha;
-      ctx.fillStyle = p.color;
-      ctx.shadowColor = p.color; ctx.shadowBlur = 8;
-      ctx.beginPath(); ctx.arc(sx, p.y, p.r, 0, Math.PI*2); ctx.fill();
-      ctx.restore();
-    }
+    p.x += p.vx; p.y += p.vy;
+    p.vx *= 0.90; p.vy *= 0.90;
+    p.alpha -= 0.028; p.r *= 0.97;
+    if (p.alpha <= 0 || p.r < 0.5) { eatParticles.splice(i,1); continue; }
+    const sx = p.x - camX;
+    ctx.save(); ctx.globalAlpha = p.alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(sx, p.y, p.r, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
   }
 
   // ── Bubble rings (dolphin vortex rings) ──────────────────────────────────
